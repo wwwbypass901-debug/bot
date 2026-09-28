@@ -1,10 +1,18 @@
 const express = require('express');
-const { Client, GatewayIntentBits, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
-require('dotenv').config();
+const { Client, GatewayIntentBits, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, SlashCommandBuilder, REST, Routes } = require('discord.js');
 
 const app = express();
 
-// Configuração do Bot do Discord
+// Configurações principais
+const BOT_TOKEN = process.env.BOT_TOKEN || "MTU1MzkwNTIyMTAwNzE4ODAwOQ.GAOuWZ.RQ4dX3dJzEdH-OAQaUnzqBoTIbIedske-9c9ic";
+const CLIENT_ID = process.env.CLIENT_ID || "1553905221007188009";
+const CLIENT_SECRET = process.env.CLIENT_SECRET || "wC2OPOPUkZpQumZ3nLkbP8d4OJdW2UUC";
+const REDIRECT_URI = process.env.REDIRECT_URI || "https://bot-9o4t.onrender.com/callback";
+const GUILD_A_ID = process.env.GUILD_A_ID || "1421344925307506751"; // Servidor principal onde usas os comandos
+const VERIFIED_ROLE_ID = "1520623884242784408"; // Cargo de verificado a atribuir
+
+let pendingGuilds = {};
+
 const client = new Client({
     intents: [
         GatewayIntentBits.Guilds,
@@ -12,106 +20,156 @@ const client = new Client({
     ]
 });
 
-client.once('ready', () => {
-    console.log(`Bot ligado como ${client.user.tag}`);
-});
+// Registar os comandos instantaneamente no servidor principal ao ligar
+client.once('ready', async () => {
+    console.log(`Bot ligado como ${client.user.tag}!`);
 
-// Listener para o comando /painel-verificacao
-client.on('interactionCreate', async interaction => {
-    if (!interaction.isChatInputCommand()) return;
+    const commands = [
+        new SlashCommandBuilder()
+            .setName('painel-verificacao')
+            .setDescription('Envia o painel de verificação padrão para liberar os canais.'),
+        
+        new SlashCommandBuilder()
+            .setName('puxar-membros')
+            .setDescription('Puxa os membros verificados para qualquer ID de servidor informado.')
+            .addStringOption(option =>
+                option.setName('servidor_id')
+                    .setDescription('O ID do servidor de destino para onde os membros serão puxados')
+                    .setRequired(true)
+            )
+    ].map(cmd => cmd.toJSON());
 
-    if (interaction.commandName === 'painel-verificacao') {
-        const clientId = process.env.CLIENT_ID;
-        const redirectUri = encodeURIComponent(process.env.REDIRECT_URI);
-        // Escopos necessários: identify, guilds.join
-        const oauthUrl = `https://discord.com/api/oauth2/authorize?client_id=${clientId}&redirect_uri=${redirectUri}&response_type=code&scope=identify%20guilds.join`;
+    const rest = new REST({ version: '10' }).setToken(BOT_TOKEN);
 
-        const row = new ActionRowBuilder().addComponents(
-            new ButtonBuilder()
-                .setStyle(ButtonStyle.Link)
-                .setLabel('Verificar no Discord')
-                .setURL(oauthUrl)
+    try {
+        console.log('A registar slash commands no servidor...');
+        await rest.put(
+            Routes.applicationGuildCommands(CLIENT_ID, GUILD_A_ID),
+            { body: commands },
         );
-
-        const embed = new EmbedBuilder()
-            .setTitle('Painel de Verificação')
-            .setDescription('Clica no botão abaixo para fazeres a tua verificação de segurança e teres acesso aos servidores.')
-            .setColor(0x00FF00);
-
-        await interaction.reply({
-            embeds: [embed],
-            components: [row],
-            ephemeral: false
-        });
+        console.log('✅ Slash commands registados com sucesso no servidor!');
+    } catch (error) {
+        console.error('Erro ao registar comandos:', error);
     }
 });
 
-// Configuração do Servidor Web (Express) para o callback do OAuth2
+// Gestão robusta dos comandos com prevenção de timeout
+client.on('interactionCreate', async interaction => {
+    if (!interaction.isChatInputCommand()) return;
+
+    try {
+        const stateKey = Math.random().toString(36).substring(7);
+
+        if (interaction.commandName === 'painel-verificacao') {
+            await interaction.deferReply({ ephemeral: false });
+
+            pendingGuilds[stateKey] = interaction.guild.id;
+
+            const encodedRedirect = encodeURIComponent(REDIRECT_URI);
+            const oauthUrl = `https://discord.com/api/oauth2/authorize?client_id=${CLIENT_ID}&redirect_uri=${encodedRedirect}&response_type=code&scope=identify%20guilds.join&state=${stateKey}`;
+
+            const row = new ActionRowBuilder().addComponents(
+                new ButtonBuilder()
+                    .setStyle(ButtonStyle.Link)
+                    .setLabel('🔐 Verificar e Liberar Acesso')
+                    .setURL(oauthUrl)
+            );
+
+            const embed = new EmbedBuilder()
+                .setTitle('Painel de Verificação')
+                .setDescription('Clica no botão abaixo para realizares a verificação de segurança e desbloqueares os canais.')
+                .setColor(0x00FF00);
+
+            await interaction.editReply({ embeds: [embed], components: [row] });
+        }
+
+        if (interaction.commandName === 'puxar-membros') {
+            await interaction.deferReply({ ephemeral: false });
+
+            const targetGuildId = interaction.options.getString('servidor_id');
+            pendingGuilds[stateKey] = targetGuildId;
+
+            const encodedRedirect = encodeURIComponent(REDIRECT_URI);
+            const oauthUrl = `https://discord.com/api/oauth2/authorize?client_id=${CLIENT_ID}&redirect_uri=${encodedRedirect}&response_type=code&scope=identify%20guilds.join&state=${stateKey}`;
+
+            const row = new ActionRowBuilder().addComponents(
+                new ButtonBuilder()
+                    .setStyle(ButtonStyle.Link)
+                    .setLabel('🚀 Verificar e Entrar no Servidor')
+                    .setURL(oauthUrl)
+            );
+
+            const embed = new EmbedBuilder()
+                .setTitle('Painel de Migração / Puxada')
+                .setDescription(`Clica no botão abaixo para te verificação e seres adicionado automaticamente ao servidor destino ID: \`${targetGuildId}\`.`)
+                .setColor(0x5865F2);
+
+            await interaction.editReply({ embeds: [embed], components: [row] });
+        }
+    } catch (error) {
+        console.error('Erro ao processar comando:', error);
+    }
+});
+
+// Servidor Web Express para o Callback do OAuth2
 app.get('/callback', async (req, res) => {
     const code = req.query.code;
+    const state = req.query.state;
     
     if (!code) {
         return res.status(400).send('Erro: Código de autorização não encontrado.');
     }
 
+    const targetGuildId = pendingGuilds[state];
+
     try {
-        // 1. Trocar o código por um Access Token
         const tokenResponse = await fetch('https://discord.com/api/oauth2/token', {
             method: 'POST',
             body: new URLSearchParams({
-                client_id: process.env.CLIENT_ID,
-                client_secret: process.env.CLIENT_SECRET,
+                client_id: CLIENT_ID,
+                client_secret: CLIENT_SECRET,
                 grant_type: 'authorization_code',
                 code: code,
-                redirect_uri: process.env.REDIRECT_URI,
+                redirect_uri: REDIRECT_URI,
             }),
-            headers: {
-                'Content-Type': 'application/x-www-form-urlencoded',
-            },
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         });
 
         const tokenData = await tokenResponse.json();
-
         if (!tokenData.access_token) {
             return res.status(400).send('Erro ao obter o token de acesso do Discord.');
         }
 
         const accessToken = tokenData.access_token;
 
-        // 2. Obter os dados do utilizador autenticado
         const userResponse = await fetch('https://discord.com/api/users/@me', {
-            headers: {
-                authorization: `Bearer ${accessToken}`,
-            },
+            headers: { authorization: `Bearer ${accessToken}` },
         });
-
         const userData = await userResponse.json();
         const userId = userData.id;
 
-        // 3. Adicionar o utilizador ao segundo servidor (GUILD_B_ID) e dar o cargo (VERIFIED_ROLE_ID)
-        const guildBId = process.env.GUILD_B_ID;
-        const verifiedRoleId = process.env.VERIFIED_ROLE_ID;
+        if (targetGuildId) {
+            try {
+                const targetGuild = await client.guilds.fetch(targetGuildId);
+                await targetGuild.members.add(userId, {
+                    accessToken: accessToken,
+                    roles: [VERIFIED_ROLE_ID]
+                });
+            } catch (err) {
+                console.error('Erro ao adicionar membro ao servidor:', err);
+            }
+        }
 
-        const guild = await client.guilds.fetch(guildBId);
-        
-        // Adiciona o membro à Guild B (requer que o bot esteja no servidor B com a permissão "Create Instant Invite" ou permissões adequadas)
-        await guild.members.add(userId, {
-            accessToken: accessToken,
-            roles: [verifiedRoleId] // Atribui o cargo diretamente ao entrar
-        });
-
-        res.send('<h1>Verificação concluída com sucesso!</h1><p>Foste verificado e adicionado ao servidor com sucesso. Podes fechar esta janela.</p>');
+        res.send('<h1>✅ Verificação concluída com sucesso!</h1><p>Foste verificado e adicionado ao servidor. Podes fechar esta janela.</p>');
     } catch (error) {
         console.error('Erro no callback:', error);
         res.status(500).send('Erro interno durante o processo de verificação.');
     }
 });
 
-// Porta dinâmica exigida pelo Render
 const PORT = process.env.PORT || 3000;
-
 app.listen(PORT, () => {
     console.log(`Servidor web a correr na porta ${PORT}`);
 });
 
-client.login(process.env.BOT_TOKEN);
+client.login(BOT_TOKEN);
