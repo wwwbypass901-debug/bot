@@ -21,7 +21,7 @@ const client = new Client({
 });
 
 client.once('ready', async () => {
-    console.log(`Bot ligado como ${client.user.tag}!`);
+    console.log(`Bot ligado com sucesso como ${client.user.tag}!`);
 
     const commands = [
         new SlashCommandBuilder()
@@ -165,10 +165,16 @@ app.get('/callback', async (req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
+
 app.listen(PORT, () => {
     console.log(`Servidor web a correr na porta ${PORT}`);
-});
-
-client.login(BOT_TOKEN).catch(error => {
-    console.error('❌ ERRO FATAL AO TENTAR LIGAR O BOT:', error);
+    console.log('A tentar iniciar sessão no Discord...');
+    
+    client.login(BOT_TOKEN)
+        .then(() => {
+            console.log('🎉 Login efetuado com sucesso!');
+        })
+        .catch(error => {
+            console.error('❌ ERRO AO FAZER LOGIN NO DISCORD:', error);
+        });
 });
